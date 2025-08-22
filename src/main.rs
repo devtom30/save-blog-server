@@ -1,3 +1,4 @@
+use log4rs::init_file;
 use axum::extract::State;
 use axum::{
     http::StatusCode,
@@ -8,7 +9,11 @@ use chrono::{DateTime, Local};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::sync::{Arc, Mutex};
+use log::warn;
 use uuid::Uuid;
+use crate::parsing::{Executable, Task};
+
+mod parsing;
 
 #[derive(Clone)]
 struct Save {
@@ -40,13 +45,19 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    match init_file("/home/tom/RustroverProjects/save-blog-server/log4rs.yml", Default::default()) {
+        Ok(_) => {}
+        Err(e) => { println!("{e}")}
+    }
+    warn!("launched");
+    
     // initialize tracing
-    tracing_subscriber::fmt::init();
+    // tracing_subscriber::fmt::init();
 
     let app_state = AppState {
         users: Arc::new(Mutex::new(vec![])),
         current_save: Arc::new(Mutex::new(None)),
-        saves_path: String::from("./saves/")
+        saves_path: String::from("/home/tom/RustroverProjects/save-blog-server/saves")
     };
 
     // build our application with a route
@@ -56,8 +67,7 @@ async fn main() {
         // `POST /users` goes to `create_user`
         .route("/users", post(create_user))
         .route("/users", get(get_users))
-        .route("/parse", post(parse_html))
-        .route("/attach", post(attach_file))
+        .route("/task", post(create_task))
         .route("/save/init", post(init_save))
         .route("/save/end", post(end_save))
         .route("/save", get(get_current_save))
@@ -112,11 +122,31 @@ async fn get_users(
     }
 }
 
-async fn parse_html() -> StatusCode {
-    StatusCode::OK
-}
-
-async fn attach_file() -> StatusCode {
+async fn create_task(
+    Json(task): Json<Task>
+) -> StatusCode {
+    warn!("executing task now…");
+    match task.execute() {
+        Err(why) => {
+            warn!("executed task Err {:?}", why);
+            return StatusCode::INTERNAL_SERVER_ERROR
+        },
+        Ok(exec_ret) => {
+            warn!("executed task Ok");
+            if !exec_ret.0.is_empty() {
+                warn!("task returned list: {:?}", exec_ret.0);
+            }
+            for url in exec_ret.0 {
+                warn!("preparing response");
+                let response = serde_json::json!({
+                                    "url": url,
+                                    "page_url": exec_ret.1,
+                                    "task_type": "download"
+                                });
+                warn!("sending response: {response}");
+            }
+        }
+    }
     StatusCode::OK
 }
 
@@ -197,4 +227,10 @@ impl Serialize for User {
         state.serialize_field("username", &self.username)?;
         state.end()
     }
+}
+
+#[derive(Clone)]
+struct Conf {
+    root_path: String,
+    sleep_between_requests: u64,
 }
